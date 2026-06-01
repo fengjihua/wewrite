@@ -238,9 +238,13 @@ python3 {skill_dir}/scripts/seo_keywords.py --json {关键词}
 **4.2 加载写作人格**：
 
 ```
-读取: {skill_dir}/personas/{style.yaml 的 writing_persona 字段}.yaml
-如果 style.yaml 没有 writing_persona 字段 → 默认 midnight-friend
+读取: {skill_dir}/personas/{选定人格}.yaml
 ```
+
+人格的选定规则（参见 `{skill_dir}/references/persona-selection.md`）：
+
+- **style.yaml 有 `writing_persona`** → 直接加载该人格。用户已固定账号声音，尊重配置（persona-selection 的「用户明确指定」优先级最高）。
+- **没有 `writing_persona`**（或用户本轮明确要求换风格）→ 读取 `references/persona-selection.md`，按 Step 2.3 选定选题的特征匹配 top 2 人格；用 history.yaml 最近 3 篇的写作人格降权（保证风格多样化），向用户展示推荐理由让其二选一；匹配不明确时默认 midnight-friend。
 
 人格文件定义了：语气浓度、数据呈现方式、情绪弧线、段落节奏、不确定性表达模板等。作为写作的硬性约束执行。
 
@@ -298,6 +302,7 @@ Category 映射规则：
 - **写作人格**：按 4.2 加载的人格参数写作（数据呈现方式、个人声音浓度、不确定性表达等）
 - **收尾方式**：persona 的 `closing_tendency` 仅作为倾向参考。根据文章内容和情绪弧线自行判断最自然的收尾方式。如果 history.yaml 中最近 3 篇有 `closing_type` 字段，避免使用相同的收尾类型
 - **写作规范**：writing-guide.md 中的基础规则（禁用词、句长方差、词汇混用等）在初稿阶段生效
+- **分段实时自检**：读取 `{skill_dir}/references/realtime-check.md`，每写完约 500 字（或每个 H2）就地执行 5 项快速检查（句长交替 / 情绪锚定 / 词汇温度 / 素材锚定 / 句法变形），问题当场掐掉不累积到全文。按 500 字/H2 粒度查，不要写一句修一句；也不要为凑检查项刻意制造大量单句段落（会触发过度优化检测）
 - 2-3 个编辑锚点：`<!-- ✏️ 编辑建议：在这里加一句你自己的经历/看法 -->`
 - 可选容器语法：`:::dialogue`、`:::timeline`、`:::callout`、`:::quote`、`:::highlight`（琥珀高亮框）、`:::summary`（青色总结框）
 
