@@ -31,7 +31,7 @@ allowed-tools:
 
 **降级原则**：每一步都有降级方案。Step 1 检测到的降级标记（`skip_publish`、`skip_image_gen`）在后续 Step 自动生效，不重复报错。
 
-**进度追踪**：主管道启动时，用 TaskCreate 为 8 个 Step 创建任务。每开始一个 Step 标记 in_progress，完成后标记 completed。用户可随时看到当前进度。
+**进度追踪**：**若 harness 提供 task 工具（如 TaskCreate）**，主管道启动时为 8 个 Step 创建任务，每步 in_progress→completed；**否则**每进入一步发一行 `[N/8] 步骤名` 文本进度。无论哪种，都必须把 8 步走完——编号清单是排序骨架，不依赖特定工具。
 
 **完成协议**：
 - **DONE** — 全流程完成，文章已保存/推送
@@ -51,20 +51,14 @@ allowed-tools:
 
 ## 主管道（Step 1-8）
 
-主管道启动时，创建以下 8 个任务用于进度追踪：
+主管道是固定的 8 个 Step（下面逐节展开）：
 
 ```
-TaskCreate: "Step 1: 环境 + 配置"
-TaskCreate: "Step 2: 选题"
-TaskCreate: "Step 3: 框架 + 素材"
-TaskCreate: "Step 4: 写作"
-TaskCreate: "Step 5: SEO + 验证"
-TaskCreate: "Step 6: 视觉 AI"
-TaskCreate: "Step 7: 排版 + 发布"
-TaskCreate: "Step 8: 收尾"
+[1/8] 环境 + 配置   [2/8] 选题   [3/8] 框架 + 素材   [4/8] 写作
+[5/8] SEO + 验证   [6/8] 视觉 AI   [7/8] 排版 + 发布   [8/8] 收尾
 ```
 
-每开始一个 Step → TaskUpdate status=in_progress。完成 → TaskUpdate status=completed。
+**进度追踪（按行为声明）**：若有 task 工具，为这 8 步建任务并逐步更新；否则每进入一步发一行 `[N/8] 步骤名`。两种方式都必须跑完 8 步。
 
 ---
 
