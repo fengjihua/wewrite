@@ -61,7 +61,9 @@ def _build_prompt(job: Job, *, publish: bool) -> str:
         f"{job.prompt}\n\n"
         f"（{mode}。请按 SKILL.md 主管道 Step 1-8 完整执行；"
         f"每进入一步输出一行 `[N/8] 步骤名` 的文本进度。{pub} "
-        f"最终把文章 Markdown 保存到 output/ 目录。）"
+        f"最终把文章正文保存为 `output/article.md`（这是要交付给用户的正文）；"
+        f"配图提示词、SEO 备注等辅助 Markdown 请另存到 `output/assets/` 子目录，"
+        f"不要和正文一起堆在 output 顶层。）"
     )
 
 
@@ -175,14 +177,53 @@ def _collect_outputs(job: Job, ws: Path, *, theme: str) -> None:
         return
     # 先持久化图片（工作区随后会被清理）
     _persist_images(job, out)
-    mds = sorted(out.glob("**/*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if mds:
-        md = mds[0]
-        text = md.read_text(encoding="utf-8")
-        job.preview_html = _generate_preview(ws, md, theme=theme)  # 预览基于原始相对路径
-        # 把正文里的本地图片引用改写成持久化后的 URL，使 markdown 自包含
-        job.article_markdown = _rewrite_md_images(text, job)
-        job.title = _first_heading(text) or md.stem
+    md = _pick_article(out)
+    if md is None:
+        return
+    text = md.read_text(encoding="utf-8")
+    job.preview_html = _generate_preview(ws, md, theme=theme)  # 预览基于原始相对路径
+    # 把正文里的本地图片引用改写成持久化后的 URL，使 markdown 自包含
+    job.article_markdown = _rewrite_md_images(text, job)
+    job.title = _first_heading(text) or md.stem
+
+
+# 文件名 / 首标题里出现这些标记，视为辅助产物（配图提示词、SEO 备注等），不是正文
+_AUX_NAME_HINTS = ("prompt", "preview", "metadata", "seo", "image", "提示词", "配图")
+_AUX_HEADING_HINTS = ("配图", "提示词", "prompt", "封面文案", "seo")
+
+
+def _looks_auxiliary(p: Path) -> bool:
+    name = p.stem.lower()
+    if any(h in name for h in _AUX_NAME_HINTS):
+        return True
+    try:
+        head = _first_heading(p.read_text(encoding="utf-8")) or ""
+    except OSError:
+        return False
+    return any(h in head.lower() for h in _AUX_HEADING_HINTS)
+
+
+def _pick_article(out: Path) -> Optional[Path]:
+    """从 output/ 里挑出"文章正文"。
+
+    不能盲取最近修改的 .md —— 管道在正文之后常会再写辅助产物（配图提示词包、SEO 备注），
+    那些 mtime 更新，会被误当成正文。选取顺序：
+      1) 约定的固定名 output/article.md（_build_prompt 已要求 agent 这样存）；
+      2) 排除 assets/ 子目录与明显的辅助产物后，取最新的 .md；
+      3) 若全被排除（极端情况），兜底取最新的任意 .md。
+    """
+    canonical = out / "article.md"
+    if canonical.is_file():
+        return canonical
+    mds = [
+        p for p in out.glob("**/*.md")
+        if p.is_file() and "assets" not in p.relative_to(out).parts[:-1]
+    ]
+    if not mds:
+        return None
+    non_aux = [p for p in mds if not _looks_auxiliary(p)]
+    pool = non_aux or mds
+    return max(pool, key=lambda p: p.stat().st_mtime)
 
 
 def _image_sort_key(p: Path) -> tuple:

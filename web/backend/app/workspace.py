@@ -95,10 +95,11 @@ def agent_env(settings: Settings, account: Account, *, theme: str) -> dict[str, 
     if settings.anthropic_api_key:
         env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
 
-    # 平台图片密钥池
-    if settings.image_provider:
+    # 平台图片密钥池：provider 与 key 必须成对注入。
+    # 若只注入 provider 而 key 为空，Step 1 会误判 skip_image_gen=false，
+    # 直到 Step 6 才发现没法生成 —— 与 _write_config 一样用 image_config() gate 保持一致。
+    if settings.image_config():
         env["WEWRITE_IMAGE_PROVIDER"] = settings.image_provider
-    if settings.image_api_key:
         env["WEWRITE_IMAGE_API_KEY"] = settings.image_api_key
     if theme:
         env["WEWRITE_THEME"] = theme
