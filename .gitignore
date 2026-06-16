@@ -41,7 +41,11 @@ dist/*
 !dist/codex/
 build/
 .venv/
+.venv
 venv/
+
+# Local web tool dev: skill→backend venv symlink target + runtime image artifacts
+.artifacts/
 
 # Internal dev docs
 docs/
