@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 """
-Fetch WeChat article statistics and update history.yaml.
+Fetch WeChat article & account statistics.
 
-Uses WeChat Data Analytics API to pull article performance:
-  - /datacube/getarticlesummary (daily summary)
-  - /datacube/getarticletotal (cumulative)
+Uses WeChat Data Analytics API (new endpoints):
+  Account-level:
+    - /datacube/getusersummary   (daily new/cancel users, max 7d)
+    - /datacube/getusercumulate  (daily cumulative users, max 7d)
+  Note-level:
+    - /datacube/getarticletotaldetail (per-article detail with daily stats, 1d query)
+
+DEPRECATED (kept for backward compat):
+    - /datacube/getarticlesummary
+    - /datacube/getarticletotal
 
 Usage:
-    python3 fetch_stats.py
-    python3 fetch_stats.py --days 7
+    python3 fetch_stats.py --days 7                          # default: notes only
+    python3 fetch_stats.py --days 7 --type account            # account only
+    python3 fetch_stats.py --days 7 --type all                # both
+    python3 fetch_stats.py --days 7 --json                    # machine-readable JSON output
+    python3 fetch_stats.py --days 7 --type all --json --account-id yqbc  # with account label
 
 Requires: wechat appid/secret in config.yaml or env vars (WECHAT_APPID, WECHAT_SECRET)
 """
@@ -21,17 +31,29 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# 确保 stdout 使用 UTF-8，防止 subprocess 管道中中文乱码
+if sys.platform == "win32":
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import requests
 import yaml
 
 SKILL_DIR = Path(__file__).parent.parent
 
-# Import unified config loader
 sys.path.insert(0, str(SKILL_DIR / "toolkit"))
 from config import load_config, get_wechat_credentials
 
 API_TIMEOUT = 30
 
+
+# ---------------------------------------------------------------------------
+# Token
+# ---------------------------------------------------------------------------
 
 def _get_access_token(appid: str, secret: str) -> str:
     resp = requests.get(
@@ -45,12 +67,87 @@ def _get_access_token(appid: str, secret: str) -> str:
     return data["access_token"]
 
 
+# ---------------------------------------------------------------------------
+# Account-level APIs (NEW)
+# ---------------------------------------------------------------------------
+
+def fetch_user_summary(token: str, begin_date: str, end_date: str) -> list[dict]:
+    """
+    Daily user growth/shrink.
+    API: POST /datacube/getusersummary  (max 7 days)
+    Returns list of {ref_date, user_source, new_user, cancel_user}
+    """
+    resp = requests.post(
+        "https://api.weixin.qq.com/datacube/getusersummary",
+        params={"access_token": token},
+        json={"begin_date": begin_date, "end_date": end_date},
+        timeout=API_TIMEOUT,
+    )
+    data = resp.json()
+    if "list" not in data:
+        errcode = data.get("errcode", "unknown")
+        if errcode == 61500 or errcode == 61501:
+            return []
+        print(f"[warn] getusersummary error: {errcode} {data.get('errmsg','')}", file=sys.stderr)
+        return []
+    return data["list"]
+
+
+def fetch_user_cumulate(token: str, begin_date: str, end_date: str) -> list[dict]:
+    """
+    Daily cumulative user count.
+    API: POST /datacube/getusercumulate  (max 7 days)
+    Returns list of {ref_date, cumulate_user}
+    """
+    resp = requests.post(
+        "https://api.weixin.qq.com/datacube/getusercumulate",
+        params={"access_token": token},
+        json={"begin_date": begin_date, "end_date": end_date},
+        timeout=API_TIMEOUT,
+    )
+    data = resp.json()
+    if "list" not in data:
+        errcode = data.get("errcode", "unknown")
+        if errcode == 61500 or errcode == 61501:
+            return []
+        print(f"[warn] getusercumulate error: {errcode} {data.get('errmsg','')}", file=sys.stderr)
+        return []
+    return data["list"]
+
+
+# ---------------------------------------------------------------------------
+# Note-level API (NEW — replaces deprecated getarticlesummary)
+# ---------------------------------------------------------------------------
+
+def fetch_article_total_detail(token: str, date_str: str) -> list[dict]:
+    """
+    Per-article detailed stats published on date_str, with daily breakdown.
+    API: POST /datacube/getarticletotaldetail  (1 day query)
+    Returns list of articles, each with detail_list of per-day cumulative stats.
+    """
+    resp = requests.post(
+        "https://api.weixin.qq.com/datacube/getarticletotaldetail",
+        params={"access_token": token},
+        json={"begin_date": date_str, "end_date": date_str},
+        timeout=API_TIMEOUT,
+    )
+    data = resp.json()
+    if "list" not in data:
+        errcode = data.get("errcode", "unknown")
+        if errcode == 61500:
+            return []
+        print(f"[warn] getarticletotaldetail error ({date_str}): {errcode} {data.get('errmsg','')}",
+              file=sys.stderr)
+        return []
+    return data["list"]
+
+
+# ---------------------------------------------------------------------------
+# Deprecated APIs (kept for backward compat)
+# ---------------------------------------------------------------------------
+
 def fetch_article_summary(token: str, date: str) -> list[dict]:
-    """
-    Fetch daily article summary.
-    API: POST /datacube/getarticlesummary
-    date format: "2026-03-23"
-    """
+    """DEPRECATED — use fetch_article_total_detail instead."""
     resp = requests.post(
         "https://api.weixin.qq.com/datacube/getarticlesummary",
         params={"access_token": token},
@@ -69,10 +166,7 @@ def fetch_article_summary(token: str, date: str) -> list[dict]:
 
 
 def fetch_article_total(token: str, date: str) -> list[dict]:
-    """
-    Fetch cumulative article stats.
-    API: POST /datacube/getarticletotal
-    """
+    """DEPRECATED — cumulative stats."""
     resp = requests.post(
         "https://api.weixin.qq.com/datacube/getarticletotal",
         params={"access_token": token},
@@ -85,92 +179,88 @@ def fetch_article_total(token: str, date: str) -> list[dict]:
     return data["list"]
 
 
-def _atomic_write_yaml(path: Path, data: dict):
-    """Write YAML atomically: write to temp file then rename to prevent corruption."""
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        dir=path.parent, suffix=".tmp", prefix=path.stem
-    )
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
-        os.replace(tmp_path, str(path))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+# ---------------------------------------------------------------------------
+# Collect
+# ---------------------------------------------------------------------------
+
+def collect_account_data(token: str, days: int) -> list[dict]:
+    """Collect account-level KPI data for last N days."""
+    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    results = []
+
+    # Chunk by 7-day windows (API limit)
+    chunk_start = datetime.now() - timedelta(days=days)
+    while chunk_start < datetime.now():
+        chunk_end = chunk_start + timedelta(days=6)
+        begin = chunk_start.strftime("%Y-%m-%d")
+        end = min(chunk_end, datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # User summary
+        for item in fetch_user_summary(token, begin, end):
+            results.append({
+                "type": "user_summary",
+                "ref_date": item["ref_date"],
+                "user_source": item.get("user_source", 0),
+                "new_user": item.get("new_user", 0),
+                "cancel_user": item.get("cancel_user", 0),
+            })
+
+        # User cumulate
+        for item in fetch_user_cumulate(token, begin, end):
+            results.append({
+                "type": "user_cumulate",
+                "ref_date": item["ref_date"],
+                "cumulate_user": item.get("cumulate_user", 0),
+            })
+
+        chunk_start = chunk_end + timedelta(days=1)
+
+    return results
 
 
-def update_history(stats_list: list[dict]):
-    """Match stats to history.yaml entries and update.
+def collect_note_data(token: str, days: int) -> list[dict]:
+    """Collect note-level KPI data for last N days."""
+    results = []
+    for i in range(days):
+        date_str = (datetime.now() - timedelta(days=i + 1)).strftime("%Y-%m-%d")
+        articles = fetch_article_total_detail(token, date_str)
+        for article in articles:
+            for stat in article.get("detail_list", []):
+                results.append({
+                    "type": "note_detail",
+                    "ref_date": article.get("ref_date", date_str),
+                    "msgid": article.get("msgid", ""),
+                    "title": article.get("title", ""),
+                    "content_url": article.get("content_url", ""),
+                    "publish_type": article.get("publish_type", 0),
+                    "stat_date": stat.get("stat_date", ""),
+                    "read_user": stat.get("read_user", 0),
+                    "share_user": stat.get("share_user", 0),
+                    "zaikan_user": stat.get("zaikan_user", 0),
+                    "like_user": stat.get("like_user", 0),
+                    "comment_count": stat.get("comment_count", 0),
+                    "collection_user": stat.get("collection_user", 0),
+                    "praise_money": stat.get("praise_money", 0),
+                    "read_subscribe_user": stat.get("read_subscribe_user", 0),
+                    "read_delivery_rate": stat.get("read_delivery_rate", 0.0),
+                    "read_finish_rate": stat.get("read_finish_rate", 0.0),
+                    "read_avg_activetime": stat.get("read_avg_activetime", 0.0),
+                })
+    return results
 
-    Matching priority:
-      1. media_id (exact, reliable)
-      2. title (fallback for older entries without media_id)
-    """
-    history_path = SKILL_DIR / "history.yaml"
-    if not history_path.exists():
-        print("No history.yaml found.")
-        return
 
-    with open(history_path, "r", encoding="utf-8") as f:
-        history = yaml.safe_load(f) or {}
-
-    articles = history.get("articles", [])
-    if not articles:
-        print("No articles in history to update.")
-        return
-
-    # Build lookups: media_id first (reliable), title as fallback
-    media_id_to_idx: dict[str, int] = {}
-    title_to_idx: dict[str, int] = {}
-    for i, article in enumerate(articles):
-        mid = article.get("media_id", "")
-        if mid:
-            media_id_to_idx[mid] = i
-        title = article.get("title", "")
-        if title:
-            title_to_idx[title] = i
-
-    updated = 0
-    for stat in stats_list:
-        # Try media_id match first
-        idx = None
-        stat_media_id = stat.get("media_id", "")
-        if stat_media_id and stat_media_id in media_id_to_idx:
-            idx = media_id_to_idx[stat_media_id]
-        else:
-            # Fallback to title match
-            title = stat.get("title", "")
-            if title in title_to_idx:
-                idx = title_to_idx[title]
-
-        if idx is not None:
-            articles[idx]["stats"] = {
-                "read_count": stat.get("int_page_read_count", 0),
-                "share_count": stat.get("share_count", 0),
-                "like_count": stat.get("old_like_count", 0) + stat.get("like_count", 0),
-                "read_rate": round(
-                    stat.get("int_page_read_count", 0)
-                    / max(stat.get("target_user", 1), 1)
-                    * 100,
-                    1,
-                ),
-            }
-            updated += 1
-
-    if updated > 0:
-        history["articles"] = articles
-        _atomic_write_yaml(history_path, history)
-        print(f"Updated stats for {updated} article(s).")
-    else:
-        print("No matching articles found in stats data.")
-
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch WeChat article stats")
-    parser.add_argument("--days", type=int, default=3, help="Days to look back")
+    parser = argparse.ArgumentParser(description="Fetch WeChat KPI stats")
+    parser.add_argument("--days", type=int, default=7, help="Days to look back (default: 7)")
+    parser.add_argument("--type", choices=["note", "account", "all"], default="note",
+                        help="Data type: note, account, or all (default: note)")
+    parser.add_argument("--json", action="store_true", help="Output as JSON (machine-readable)")
+    parser.add_argument("--account-id", default=None, help="Account label for output metadata")
+    parser.add_argument("--output", default=None, help="Write JSON to file (avoids pipe encoding issues)")
     args = parser.parse_args()
 
     try:
@@ -180,28 +270,51 @@ def main():
         sys.exit(1)
 
     token = _get_access_token(appid, secret)
-    print(f"Fetching stats for last {args.days} days...")
+    results = []
 
-    all_stats = []
-    for i in range(args.days):
-        date = (datetime.now() - timedelta(days=i + 1)).strftime("%Y-%m-%d")
-        stats = fetch_article_summary(token, date)
-        if stats:
-            print(f"  {date}: {len(stats)} article(s)")
-            all_stats.extend(stats)
+    if args.type in ("account", "all"):
+        account_data = collect_account_data(token, args.days)
+        results.extend(account_data)
 
-    if all_stats:
-        update_history(all_stats)
+    if args.type in ("note", "all"):
+        note_data = collect_note_data(token, args.days)
+        results.extend(note_data)
+
+    if args.json:
+        output = {
+            "account_id": args.account_id or "",
+            "query_days": args.days,
+            "query_type": args.type,
+            "count": len(results),
+            "data": results,
+        }
+        if args.output:
+            # 写入文件（避免管道编码问题）
+            Path(args.output).write_text(
+                json.dumps(output, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"Written to {args.output}", file=sys.stderr)
+        else:
+            # stdout 输出（仅当 stdout 是 UTF-8 终端时可靠）
+            sys.stdout.buffer.write(
+                json.dumps(output, ensure_ascii=False, indent=2).encode("utf-8")
+            )
+            sys.stdout.buffer.write(b"\n")
     else:
-        print("No stats data found for the specified period.")
-
-    # Also print summary
-    print(f"\nTotal data points: {len(all_stats)}")
-    for s in all_stats:
-        title = s.get("title", "unknown")
-        reads = s.get("int_page_read_count", 0)
-        shares = s.get("share_count", 0)
-        print(f"  [{reads} reads, {shares} shares] {title}")
+        # Human-readable summary
+        account_items = [r for r in results if r["type"] in ("user_summary", "user_cumulate")]
+        note_items = [r for r in results if r["type"] == "note_detail"]
+        print(f"Fetched {len(results)} records ({len(account_items)} account, {len(note_items)} note)")
+        for r in results[:20]:
+            if r["type"] == "user_summary":
+                print(f"  [{r['ref_date']}] +{r['new_user']} -{r['cancel_user']} fans")
+            elif r["type"] == "user_cumulate":
+                print(f"  [{r['ref_date']}] cumulate={r['cumulate_user']}")
+            elif r["type"] == "note_detail":
+                print(f"  [{r['stat_date']}] {r['title'][:30]} reads={r['read_user']} likes={r['like_user']}")
+        if len(results) > 20:
+            print(f"  ... and {len(results) - 20} more records")
 
 
 if __name__ == "__main__":
