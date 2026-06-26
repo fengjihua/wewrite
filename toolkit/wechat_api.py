@@ -138,3 +138,56 @@ def upload_thumb(access_token: str, image_path: str) -> str:
         raise ValueError(f"WeChat upload_thumb error: errcode={errcode}, errmsg={errmsg}")
 
     return data["media_id"]
+
+
+# [v0.2] delete permanent material by media_id
+def delete_material(access_token: str, media_id: str) -> dict:
+    """
+    Delete a permanent material by media_id.
+    API: POST https://api.weixin.qq.com/cgi-bin/material/del_material
+    Returns the full API response dict.
+    Raise ValueError on API error.
+    """
+    resp = requests.post(
+        "https://api.weixin.qq.com/cgi-bin/material/del_material",
+        params={"access_token": access_token},
+        json={"media_id": media_id},
+    )
+    data = resp.json()
+    errcode = data.get("errcode", -1)
+    if errcode != 0:
+        errmsg = data.get("errmsg", "unknown error")
+        raise ValueError(
+            f"WeChat delete_material error: errcode={errcode}, errmsg={errmsg}"
+        )
+    return data
+
+
+# [v0.2] get permanent material info by media_id
+def get_material(access_token: str, media_id: str) -> dict:
+    """
+    Get permanent material metadata by media_id.
+    API: POST https://api.weixin.qq.com/cgi-bin/material/get_material
+    For image type, returns the image file bytes.
+    For news type, returns news_item dict.
+    Raise ValueError on API error.
+    """
+    resp = requests.post(
+        "https://api.weixin.qq.com/cgi-bin/material/get_material",
+        params={"access_token": access_token},
+        json={"media_id": media_id},
+    )
+    # Image/video material returns raw binary, news returns JSON
+    content_type = resp.headers.get("Content-Type", "")
+    if "application/json" in content_type or "text/plain" in content_type:
+        resp.encoding = "utf-8"
+        data = resp.json()
+        errcode = data.get("errcode", -1)
+        if errcode != 0 and "errcode" in data:
+            errmsg = data.get("errmsg", "unknown error")
+            raise ValueError(
+                f"WeChat get_material error: errcode={errcode}, errmsg={errmsg}"
+            )
+        return data
+    # Binary response (image/voice/video)
+    return {"content_type": content_type, "body": resp.content}

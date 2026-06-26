@@ -94,6 +94,27 @@ def get_draft(access_token: str, media_id: str) -> str:
     return articles[0].get("content", "")
 
 
+# [v0.2] delete draft by media_id
+def delete_draft(access_token: str, media_id: str) -> dict:
+    """
+    Delete a draft from WeChat by media_id.
+    API: POST https://api.weixin.qq.com/cgi-bin/draft/delete
+    Returns the full API response dict (errcode, errmsg).
+    Raise ValueError on API error.
+    """
+    resp = requests.post(
+        "https://api.weixin.qq.com/cgi-bin/draft/delete",
+        params={"access_token": access_token},
+        json={"media_id": media_id},
+    )
+    data = resp.json()
+    errcode = data.get("errcode", -1)
+    if errcode != 0:
+        errmsg = data.get("errmsg", "unknown error")
+        raise ValueError(f"WeChat delete_draft error: errcode={errcode}, errmsg={errmsg}")
+    return data
+
+
 def html_to_plaintext(html: str) -> str:
     """Extract plain text from WeChat HTML, stripping all tags and styles."""
     import re
